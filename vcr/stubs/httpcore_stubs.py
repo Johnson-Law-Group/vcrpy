@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import functools
 import logging
 from collections import defaultdict
@@ -175,7 +176,7 @@ def vcr_handle_async_request(cassette, real_handle_async_request):
     return _inner_handle_async_request
 
 
-def _run_async_function(sync_func, *args, **kwargs):
+def _run_async_function(async_func, *args, **kwargs):
     """
     Safely run an asynchronous function from a synchronous context.
     Handles both cases:
@@ -185,10 +186,14 @@ def _run_async_function(sync_func, *args, **kwargs):
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(sync_func(*args, **kwargs))
+        return asyncio.run(async_func(*args, **kwargs))
     else:
-        # If inside a running loop, create a task and wait for it
-        return asyncio.ensure_future(sync_func(*args, **kwargs))
+        # If inside a running loop, run in a separate thread with a new event loop
+        def run_in_thread():
+            return asyncio.run(async_func(*args, **kwargs))
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(run_in_thread)
+            return future.result()
 
 
 def _vcr_handle_request(cassette, real_handle_request, self, real_request):
